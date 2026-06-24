@@ -517,6 +517,8 @@ class SuppliersStream(TilroyStream):
 
     schema = th.PropertiesList(
         th.Property("tilroyId", th.IntegerType),
-        th.Property("code", th.CustomType({"type": ["string", "number", "null"]})),
-        th.Property("name", th.CustomType({"type": ["string", "number", "null"]})),
+        # Supplier codes are identifiers, not numeric values. Keep them as strings
+        # so leading zeroes from Tilroy (for example "00560") survive CSV output.
+        th.Property("code", th.CustomType({"type": ["string", "null"]})),
+        th.Property("name", th.CustomType({"type": ["string", "null"]})),
     ).to_dict()

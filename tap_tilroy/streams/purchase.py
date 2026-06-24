@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import typing as t
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 from singer_sdk import typing as th
 
 from tap_tilroy.client import TilroyStream
+
 
 if t.TYPE_CHECKING:
     from singer_sdk.helpers.types import Context
@@ -20,20 +21,22 @@ PURCHASE_ORDER_STATUSES = ["draft", "open", "delivered", "cancelled", "backorder
 class PurchaseOrdersStream(TilroyStream):
     """Stream for Tilroy purchase orders.
 
-    Always uses /purchaseorders endpoint with orderDateFrom + orderDateTo.
-    Iterates through warehouse_id + status combinations internally to avoid
-    per-partition state bloat. Maintains a single global bookmark.
-    
+    The Tilroy purchase-orders endpoint exposes modified timestamps on records,
+    but the live API ignores tested modified/dateModified request parameters.
+    Therefore this stream fetches the paginated purchase-order set and applies
+    the modified cursor client-side. This prevents old orders with later status
+    changes from being skipped by an orderDate bookmark.
+
     Note: warehouseNumber filter requires status filter.
     """
 
     name = "purchase_orders"
     path = "/purchaseapi/production/purchaseorders"
     primary_keys: t.ClassVar[list[str]] = ["tilroyId"]
-    replication_key = "orderDate"
+    replication_key = "modified_timestamp"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[*]"
-    default_count = 500
+    default_count = 100
 
     schema = th.PropertiesList(
         th.Property("tilroyId", th.CustomType({"type": ["string", "integer"]})),
@@ -48,6 +51,7 @@ class PurchaseOrdersStream(TilroyStream):
         th.Property("status", th.CustomType({"type": ["string", "number", "null"]})),
         th.Property("created", th.CustomType({"type": ["object", "string", "null"]})),
         th.Property("modified", th.CustomType({"type": ["object", "string", "null"]})),
+        th.Property("modified_timestamp", th.DateTimeType),
         th.Property(
             "lines",
             th.ArrayType(
@@ -87,56 +91,97 @@ class PurchaseOrdersStream(TilroyStream):
         ),
     ).to_dict()
 
+    @staticmethod
+    def _parse_timestamp(value: object) -> datetime | None:
+        """Parse a Tilroy timestamp into a comparable aware datetime."""
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str) and value:
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        else:
+            return None
+
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    def _get_stream_state(self) -> dict:
+        """Return the global stream state when available."""
+        try:
+            state = self.get_context_state(None)
+        except AttributeError:
+            state = None
+
+        if isinstance(state, dict):
+            return state
+
+        return {}
+
     def _get_start_date(self) -> datetime:
-        """Determine the start date for filtering from global bookmark.
+        """Determine the modified start date from the global bookmark.
 
-        Returns:
-            The start date for the query.
+        Legacy deployments bookmarked this stream by orderDate. That bookmark is
+        intentionally ignored once the replication key changes, otherwise old
+        orders modified after their original order date would remain skipped.
         """
-        # Try to get from bookmark (no context = global bookmark)
-        bookmark_date = self.get_starting_timestamp(None)
+        stream_state = self._get_stream_state()
+        if stream_state.get("replication_key") not in (None, self.replication_key):
+            self.logger.info(
+                "[%s] Ignoring legacy %s bookmark while switching to %s",
+                self.name,
+                stream_state.get("replication_key"),
+                self.replication_key,
+            )
+        else:
+            bookmark_date = stream_state.get("replication_key_value")
+            if not bookmark_date:
+                bookmark_date = self.get_starting_timestamp(None)
+            if bookmark_date:
+                parsed = self._parse_timestamp(bookmark_date)
+                if parsed:
+                    return parsed
 
-        if bookmark_date:
-            # Go back 1 day to avoid missing records at boundary
-            if hasattr(bookmark_date, "date"):
-                date_only = bookmark_date.date()
-            else:
-                date_only = bookmark_date
-            return datetime.combine(date_only - timedelta(days=1), datetime.min.time())
-
-        # Fall back to config start_date
         config_start = self.config.get("start_date", "2010-01-01T00:00:00Z")
-        date_part = config_start.split("T")[0]
-        return datetime.strptime(date_part, "%Y-%m-%d")
+        parsed_config = self._parse_timestamp(config_start)
+        if parsed_config:
+            return parsed_config
+
+        date_part = str(config_start).split("T")[0]
+        return datetime.strptime(date_part, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+    def _get_request_params(
+        self,
+        warehouse_id: int | None,
+        status: str | None,
+        page: int,
+    ) -> dict[str, t.Any]:
+        """Build request params for the unfiltered purchase-order page.
+
+        The live API ignores modified/dateModified query params on this endpoint,
+        so incremental filtering happens after parsing records.
+        """
+        params: dict[str, t.Any] = {
+            "count": self.default_count,
+            "page": page,
+        }
+
+        if warehouse_id and status:
+            params["warehouseNumber"] = warehouse_id
+            params["status"] = status
+
+        return params
 
     def _fetch_page(
         self,
         warehouse_id: int | None,
         status: str | None,
         page: int,
-        start_date: datetime,
     ) -> tuple[list[dict], bool]:
-        """Fetch a single page of purchase orders.
-        
-        Args:
-            warehouse_id: Warehouse number filter (requires status).
-            status: Status filter (required with warehouse_id).
-            page: Page number.
-            start_date: Start date for orderDateFrom.
-            
-        Returns:
-            Tuple of (records, has_more_pages).
-        """
-        params = {
-            "count": self.default_count,
-            "page": page,
-            "orderDateFrom": start_date.strftime("%Y-%m-%d"),
-            "orderDateTo": datetime.now().strftime("%Y-%m-%d"),
-        }
-
-        if warehouse_id and status:
-            params["warehouseNumber"] = warehouse_id
-            params["status"] = status
+        """Fetch a single page of purchase orders."""
+        params = self._get_request_params(warehouse_id, status, page)
 
         prepared = self.build_prepared_request(
             method="GET",
@@ -158,58 +203,71 @@ class PurchaseOrdersStream(TilroyStream):
         self,
         warehouse_id: int | None,
         status: str | None,
-        start_date: datetime,
     ) -> t.Iterable[dict]:
         """Fetch all pages for a warehouse/status combination.
-        
+
         Args:
             warehouse_id: Warehouse number filter.
             status: Status filter.
-            start_date: Start date for filtering.
-            
+
         Yields:
             Purchase order records.
         """
         page = 1
         while True:
-            records, has_more = self._fetch_page(warehouse_id, status, page, start_date)
+            records, has_more = self._fetch_page(warehouse_id, status, page)
             
             # Break if no records returned (avoid infinite loop)
             if not records:
                 break
-            
-            for record in records:
-                yield record
-            
+            yield from records
+
             if not has_more:
                 break
             page += 1
 
     def get_records(self, context: Context | None) -> t.Iterable[dict]:
-        """Fetch purchase orders, iterating through warehouse/status combos internally.
-        
+        """Fetch purchase orders and filter records by modified timestamp.
+
         This avoids partition-based state. Single global bookmark is maintained.
         """
         start_date = self._get_start_date()
         warehouse_ids = getattr(self._tap, "_resolved_shop_ids", [])
-        
+
         if not warehouse_ids:
-            # No warehouse filter - fetch all
-            self.logger.info(f"[{self.name}] Fetching all purchase orders from {start_date.date()}")
-            yield from self._fetch_all_for_filter(None, None, start_date)
-        else:
-            # Iterate through each warehouse + status combination
             self.logger.info(
-                f"[{self.name}] Fetching for warehouses {warehouse_ids} from {start_date.date()}"
+                "[%s] Fetching all purchase orders modified since %s",
+                self.name,
+                start_date.isoformat(),
             )
-            for wh_id in warehouse_ids:
-                for status in PURCHASE_ORDER_STATUSES:
-                    yield from self._fetch_all_for_filter(wh_id, status, start_date)
+            raw_records = self._fetch_all_for_filter(None, None)
+        else:
+            self.logger.info(
+                "[%s] Fetching purchase orders for warehouses %s modified since %s",
+                self.name,
+                warehouse_ids,
+                start_date.isoformat(),
+            )
+            raw_records = (
+                record
+                for wh_id in warehouse_ids
+                for status in PURCHASE_ORDER_STATUSES
+                for record in self._fetch_all_for_filter(wh_id, status)
+            )
+
+        for record in raw_records:
+            processed = self.post_process(record, context)
+            if not processed:
+                continue
+
+            modified_at = self._parse_timestamp(processed.get(self.replication_key))
+            if modified_at and modified_at >= start_date:
+                yield processed
 
     def post_process(
         self,
         row: dict,
-        context: Context | None = None,
+        context: Context | None = None,  # noqa: ARG002
     ) -> dict | None:
         """Post-process purchase order record.
 
@@ -220,23 +278,39 @@ class PurchaseOrdersStream(TilroyStream):
 
         # Skip error responses
         if "code" in row and "message" in row:
-            self.logger.warning(f"[{self.name}] Skipping error record: {row['message']}")
+            self.logger.warning(
+                "[%s] Skipping error record: %s",
+                self.name,
+                row["message"],
+            )
             return None
 
         # Validate orderDate exists
         if not row.get("orderDate"):
-            self.logger.warning(f"[{self.name}] Skipping record without orderDate")
+            self.logger.warning("[%s] Skipping record without orderDate", self.name)
             return None
 
         # Parse orderDate string to datetime
         order_date = row["orderDate"]
-        if isinstance(order_date, str):
-            try:
-                row["orderDate"] = datetime.fromisoformat(
-                    order_date.replace("Z", "+00:00")
-                )
-            except ValueError:
-                self.logger.warning(f"[{self.name}] Invalid orderDate format: {order_date}")
-                return None
+        parsed_order_date = self._parse_timestamp(order_date)
+        if parsed_order_date:
+            row["orderDate"] = parsed_order_date
+        else:
+            self.logger.warning(
+                "[%s] Invalid orderDate format: %s",
+                self.name,
+                order_date,
+            )
+            return None
+
+        modified_at = None
+        modified = row.get("modified")
+        if isinstance(modified, dict):
+            modified_at = self._parse_timestamp(modified.get("timestamp"))
+
+        # Some historical/source records may not carry modified metadata. Keep
+        # them syncable by falling back to orderDate, while normal records use
+        # the actual modified timestamp as the incremental cursor.
+        row[self.replication_key] = modified_at or parsed_order_date
 
         return row
