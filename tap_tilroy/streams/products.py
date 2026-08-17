@@ -74,6 +74,7 @@ class ProductsStream(DynamicRoutingStream):
                                 th.Property("sourceId", th.CustomType({"type": ["string", "number", "null"]})),
                                 th.Property("code", th.CustomType({"type": ["string", "number", "null"]})),
                                 th.Property("costPrice", th.NumberType),
+                                th.Property("MOQ", th.NumberType),
                                 th.Property(
                                     "barcodes",
                                     th.ArrayType(
