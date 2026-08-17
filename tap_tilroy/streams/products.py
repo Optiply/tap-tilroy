@@ -35,7 +35,7 @@ class ProductsStream(DynamicRoutingStream):
     replication_key = "extraction_timestamp"  # Synthetic replication key
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[*]"
-    default_count = 1000  # Product API allows up to 1000 per page
+    default_count = 500  # Product API caps responses at 500 records per page
 
     # SKU IDs from colours[].skus[].tilroyId — consumed by PricesStream and StockStream.
     # Product IDs from product-level tilroyId — consumed by ProductDetailsStream.
