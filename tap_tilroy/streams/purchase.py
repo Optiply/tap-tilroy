@@ -51,6 +51,7 @@ class PurchaseOrdersStream(TilroyStream):
         th.Property("status", th.CustomType({"type": ["string", "number", "null"]})),
         th.Property("created", th.CustomType({"type": ["object", "string", "null"]})),
         th.Property("modified", th.CustomType({"type": ["object", "string", "null"]})),
+        th.Property("sentToSupplier", th.CustomType({"type": ["boolean", "null"]})),
         th.Property("modified_timestamp", th.DateTimeType),
         th.Property(
             "lines",
@@ -83,6 +84,31 @@ class PurchaseOrdersStream(TilroyStream):
                     ),
                     th.Property("prices", th.CustomType({"type": ["object", "string", "null"]})),
                     th.Property("discount", th.CustomType({"type": ["object", "string", "null"]})),
+                    th.Property(
+                        "distributionProposal",
+                        th.ArrayType(
+                            th.ObjectType(
+                                th.Property(
+                                    "shop",
+                                    th.ObjectType(
+                                        th.Property(
+                                            "tilroyId",
+                                            th.CustomType({"type": ["string", "number", "null"]}),
+                                        ),
+                                        th.Property(
+                                            "name",
+                                            th.CustomType({"type": ["string", "null"]}),
+                                        ),
+                                        th.Property(
+                                            "number",
+                                            th.CustomType({"type": ["string", "number", "null"]}),
+                                        ),
+                                    ),
+                                ),
+                                th.Property("qty", th.CustomType({"type": ["number", "null"]})),
+                            )
+                        ),
+                    ),
                     th.Property("id", th.CustomType({"type": ["string", "number", "null"]})),
                     th.Property("created", th.CustomType({"type": ["object", "string", "null"]})),
                     th.Property("modified", th.CustomType({"type": ["object", "string", "null"]})),
