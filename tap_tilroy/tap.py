@@ -208,6 +208,12 @@ class TapTilroy(Tap):
         return ",".join(str(v) for v in values)
 
     def _resolve_shop_mappings(self) -> None:
+        """Load shop filters independently."""
+        self._resolved_shop_ids = self._parse_csv_ids(self.config.get("shop_ids"))
+        self._resolved_shop_numbers = self._parse_csv_ids(
+            self.config.get("shop_numbers")
+        )
+        
         """Fetch shops and resolve ID/number mappings.
         
         If shop_ids and/or shop_numbers are configured, fetches shops from API,
@@ -216,6 +222,7 @@ class TapTilroy(Tap):
         Persists both lists back to config.
         
         Config values are comma-separated strings like "1,2,3".
+        """
         """
         filter_ids = self._parse_csv_ids(self.config.get("shop_ids"))
         filter_numbers = self._parse_csv_ids(self.config.get("shop_numbers"))
@@ -275,13 +282,6 @@ class TapTilroy(Tap):
             self._config["shop_ids"] = self._format_csv_ids(self._resolved_shop_ids)
             self._config["shop_numbers"] = self._format_csv_ids(self._resolved_shop_numbers)
             self._write_config()
-
-        """
-        Load shop filters independently.
-        self._resolved_shop_ids = self._parse_csv_ids(self.config.get("shop_ids"))
-        self._resolved_shop_numbers = self._parse_csv_ids(
-            self.config.get("shop_numbers")
-        )
         """
 
     def discover_streams(self) -> list[Stream]:
