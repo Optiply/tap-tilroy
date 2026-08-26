@@ -258,8 +258,9 @@ class PurchaseOrdersStream(TilroyStream):
         This avoids partition-based state. Single global bookmark is maintained.
         """
         start_date = self._get_start_date()
-        warehouse_ids = getattr(self._tap, "_resolved_shop_ids", [])
-
+        purchase_order_shop_ids = self._tap._parse_csv_ids(self.config.get("purchase_orders_shop_ids"))
+        warehouse_ids = purchase_order_shop_ids or getattr(self._tap, "_resolved_shop_ids", [])
+        
         if not warehouse_ids:
             self.logger.info(
                 "[%s] Fetching all purchase orders modified since %s",
