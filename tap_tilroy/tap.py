@@ -103,6 +103,11 @@ class TapTilroy(Tap):
             th.StringType,
             description="Comma-separated shop numbers to filter streams (e.g., '1672,1673'). Tap will auto-resolve tilroyIds.",
         ),
+        th.Property(
+           "purchase_orders_shop_ids",
+           th.StringType,
+           description="Comma-separated shop IDs used only by purchase_orders",
+        )
     ).to_dict()
 
     # Resolved shop mappings (populated in __init__)
