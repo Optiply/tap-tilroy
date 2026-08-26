@@ -208,73 +208,11 @@ class TapTilroy(Tap):
         return ",".join(str(v) for v in values)
 
     def _resolve_shop_mappings(self) -> None:
-        """Fetch shops and resolve ID/number mappings.
-        
-        If shop_ids and/or shop_numbers are configured, fetches shops from API,
-        resolves IDs <-> numbers, and merges into one consistent set (so adding
-        shop_ids to existing shop_numbers just adds more shops; order does not matter).
-        Persists both lists back to config.
-        
-        Config values are comma-separated strings like "1,2,3".
-        """
-        filter_ids = self._parse_csv_ids(self.config.get("shop_ids"))
-        filter_numbers = self._parse_csv_ids(self.config.get("shop_numbers"))
-        
-        if not filter_ids and not filter_numbers:
-            self.logger.info("No shop filters configured - streams will fetch all data")
-            return
-        
-        self.logger.info("Fetching shops to resolve ID/number mappings...")
-        try:
-            response = requests.get(
-                f"{self.config['api_url']}/shopapi/production/shops",
-                headers={
-                    "Tilroy-Api-Key": self.config["tilroy_api_key"],
-                    "x-api-key": self.config["x_api_key"],
-                },
-                timeout=30,
-            )
-            response.raise_for_status()
-            shops = response.json()
-        except Exception as e:
-            self.logger.error(f"Failed to fetch shops for mapping: {e}")
-            self._resolved_shop_ids = filter_ids
-            self._resolved_shop_numbers = filter_numbers
-            return
-        
-        id_to_number = {}
-        number_to_id = {}
-        for s in shops:
-            try:
-                tid = int(s.get("tilroyId", 0))
-                num = int(s.get("number", 0))
-                id_to_number[tid] = num
-                number_to_id[num] = tid
-            except (ValueError, TypeError):
-                continue
-        
-        resolved_ids = set(filter_ids)
-        resolved_numbers = set(filter_numbers)
-        for sid in filter_ids:
-            if sid in id_to_number:
-                resolved_numbers.add(id_to_number[sid])
-        for num in filter_numbers:
-            if num in number_to_id:
-                resolved_ids.add(number_to_id[num])
-        
-        self._resolved_shop_ids = sorted(resolved_ids)
-        self._resolved_shop_numbers = [
-            id_to_number[sid] for sid in self._resolved_shop_ids if sid in id_to_number
-        ]
-        self.logger.info(
-            f"Resolved shop mappings: IDs {self._resolved_shop_ids}, "
-            f"numbers {self._resolved_shop_numbers}"
-        )
-        
-        if self._resolved_shop_ids and self._resolved_shop_numbers:
-            self._config["shop_ids"] = self._format_csv_ids(self._resolved_shop_ids)
-            self._config["shop_numbers"] = self._format_csv_ids(self._resolved_shop_numbers)
-            self._write_config()
+       """Load shop filters independently."""
+       self._resolved_shop_ids = self._parse_csv_ids(self.config.get("shop_ids"))
+       self._resolved_shop_numbers = self._parse_csv_ids(
+           self.config.get("shop_numbers")
+       )
 
     def discover_streams(self) -> list[Stream]:
         """Return list of discovered streams.
