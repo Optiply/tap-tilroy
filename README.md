@@ -62,6 +62,20 @@ Developer TODO: If your tap requires special access on the source system, or any
 - **Products** must run before **stock** (and optionally **prices**). The tap sync order ensures products run first; it collects SKU IDs that the stock stream uses for per-SKU API calls.
 - **Prices**: `GET /priceapi/production/price/rules` with `count` and `page`; paginate until no more records or API reports no more pages. 504 responses are retried with backoff. Products stream is not required for prices.
 
+## Purchase order exports
+
+`purchase_order_exports` reads `GET /purchaseapi/production/export/orders`
+([API reference](https://tilroy-apidocs-prd.s3.eu-west-1.amazonaws.com/purchaseapi.html#tag/export-import/paths/~1export~1%7Btype%7D/get)).
+It is independent of `purchase_orders` and preserves nested order lines. Uses
+existing API keys, `tilroyId` as the primary key, and `dateExported` for incremental
+state. `dateExportedSince` starts from `start_date` (default 2010-01-01 UTC),
+with a one-day replay of the SDK starting timestamp to cover boundary ties.
+Requests use `count=100` and increasing `page`, stopping at the paging headers'
+final page or an empty response. Repeated pages and invalid records fail the sync.
+No shop/status filters or separate deletion feed are applied. API response shape
+and export retention have not been verified live; offline tests cover both the
+list described by the docs and their single-object example.
+
 ## Usage
 
 You can easily run `tap-tilroy` by itself or in a pipeline using [Meltano](https://meltano.com/).
