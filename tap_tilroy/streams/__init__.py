@@ -6,6 +6,7 @@ from tap_tilroy.streams.sales import SalesStream
 from tap_tilroy.streams.stock import StockStream, StockChangesStream, StockDeltasStream
 from tap_tilroy.streams.prices import PricesStream
 from tap_tilroy.streams.purchase import PurchaseOrdersStream
+from tap_tilroy.streams.purchase_exports import PurchaseOrderExportsStream
 from tap_tilroy.streams.transfers import TransfersStream
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
     "StockDeltasStream",
     "PricesStream",
     "PurchaseOrdersStream",
+    "PurchaseOrderExportsStream",
     "TransfersStream",
 ]
