@@ -21,7 +21,8 @@ PRODUCT_V2_PATH = "/product-bulk/production/v2/products"
 class ProductsStream(DynamicRoutingStream):
     """Lightweight product stream that paginates the list endpoint directly.
 
-    Emits records from the list response (no individual v2 fetches).
+    Emits records from the list response. The list endpoint has no colour names,
+    so a first sync adds them from v2/products/{id} for products with colours.
     Primary purpose: collect SKU IDs for use by PricesStream and StockStream.
 
     - First sync (no state): GET /product-bulk/production/products
@@ -121,7 +122,7 @@ class ProductsStream(DynamicRoutingStream):
     ).to_dict()
 
     def request_records(self, context: Context | None) -> t.Iterable[dict]:
-        """Paginate list endpoint directly. No individual v2 fetches."""
+        """Paginate list endpoint directly; a first sync adds colour descriptions from v2."""
         is_incremental = self._has_existing_state()
         list_path = self.incremental_path if is_incremental else self.historical_path
         start_time = time.time()
@@ -164,6 +165,8 @@ class ProductsStream(DynamicRoutingStream):
             page_count = len(records)
 
             for record in records:
+                if not is_incremental:
+                    self._add_colour_descriptions(record, context)
                 processed = self.post_process(record, context)
                 if processed:
                     total_yielded += 1
@@ -194,6 +197,24 @@ class ProductsStream(DynamicRoutingStream):
             f"=== [{self.name}] {sync_type} SYNC COMPLETE === "
             f"{total_yielded:,} products in {elapsed:.0f}s"
         )
+
+    def _add_colour_descriptions(self, product: dict, context: Context | None) -> None:
+        """Copy colours[].descriptions from v2/products/{id}, matched on colour code."""
+        colours = [c for c in product.get("colours") or [] if isinstance(c, dict)]
+        if all(c.get("code") in (None, "", "NoColour") for c in colours):
+            return
+        url = f"{self.url_base.rstrip('/')}{PRODUCT_V2_PATH}/{product.get('tilroyId')}"
+        prepared = self.build_prepared_request(method="GET", url=url, params={}, headers=self.http_headers)
+        try:
+            detail = self._request_with_backoff(prepared, context).json()
+        except Exception as e:  # noqa: BLE001 - emit the product without colour names rather than drop it
+            self.logger.warning(f"[{self.name}] Colour names for product {product.get('tilroyId')} failed: {e}")
+            return
+        detail_colours = detail.get("colours") if isinstance(detail, dict) else None
+        names = {c.get("code"): c.get("descriptions") for c in detail_colours or [] if isinstance(c, dict)}
+        for colour in colours:
+            if colour.get("descriptions") is None and names.get(colour.get("code")) is not None:
+                colour["descriptions"] = names[colour.get("code")]
 
     def post_process(
         self,
